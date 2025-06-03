@@ -23,6 +23,11 @@ export class CognitoStack extends cdk.Stack {
             signInAliases: {
                 email: true,
             },
+            passwordPolicy: {
+                minLength: 8,
+                requireUppercase: true,
+                requireDigits: true,
+            },
             autoVerify: {
                 email: true,
             },
