@@ -1,8 +1,16 @@
-import * as cdk from "aws-cdk-lib";
+import { StackProps, Stack, RemovalPolicy, SecretValue, CfnOutput } from "aws-cdk-lib";
 import { Construct } from "constructs";
-import * as cognito from "aws-cdk-lib/aws-cognito";
+import {
+    UserPool,
+    AccountRecovery,
+    UserPoolClientIdentityProvider,
+    UserPoolIdentityProviderGoogle,
+    UserPoolIdentityProviderOidc,
+    ProviderAttribute,
+    OAuthScope,
+} from "aws-cdk-lib/aws-cognito";
 
-export interface CognitoStackProps extends cdk.StackProps {
+export interface CognitoStackProps extends StackProps {
     callbackUrls: string[];
     logoutUrls: string[];
     userPoolDomain?: string;
@@ -13,12 +21,12 @@ export interface CognitoStackProps extends cdk.StackProps {
     microsoftTenantId?: string;
 }
 
-export class CognitoStack extends cdk.Stack {
+export class CognitoStack extends Stack {
     constructor(scope: Construct, id: string, props: CognitoStackProps) {
         super(scope, id, props);
 
         // Create a Cognito User Pool
-        const userPool = new cognito.UserPool(this, "SaffiraUserPool", {
+        const userPool = new UserPool(this, "SaffiraUserPool", {
             selfSignUpEnabled: true,
             signInAliases: {
                 email: true,
@@ -31,39 +39,39 @@ export class CognitoStack extends cdk.Stack {
             autoVerify: {
                 email: true,
             },
-            accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+            accountRecovery: AccountRecovery.EMAIL_ONLY,
             removalPolicy:
-                process.env.NODE_ENV === "development" ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN,
+                process.env.NODE_ENV === "development" ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN,
         });
 
         // Google and Microsoft Identity Providers
-        const supportedProviders: cognito.UserPoolClientIdentityProvider[] = [
-            cognito.UserPoolClientIdentityProvider.COGNITO,
+        const supportedProviders: UserPoolClientIdentityProvider[] = [
+            UserPoolClientIdentityProvider.COGNITO,
         ];
         const dependencies: Construct[] = [];
 
-        let googleProvider: cognito.UserPoolIdentityProviderGoogle | undefined;
+        let googleProvider: UserPoolIdentityProviderGoogle | undefined;
         if (props.googleClientId && props.googleClientSecret) {
-            googleProvider = new cognito.UserPoolIdentityProviderGoogle(this, "SaffiraGoogleProvider", {
+            googleProvider = new UserPoolIdentityProviderGoogle(this, "SaffiraGoogleProvider", {
                 userPool: userPool,
                 clientId: props.googleClientId || "",
-                clientSecretValue: cdk.SecretValue.unsafePlainText(props.googleClientSecret),
+                clientSecretValue: SecretValue.unsafePlainText(props.googleClientSecret),
                 scopes: ["email", "profile", "openid"],
                 attributeMapping: {
-                    email: cognito.ProviderAttribute.GOOGLE_EMAIL,
-                    givenName: cognito.ProviderAttribute.GOOGLE_GIVEN_NAME,
-                    familyName: cognito.ProviderAttribute.GOOGLE_FAMILY_NAME,
-                    profilePicture: cognito.ProviderAttribute.GOOGLE_PICTURE,
+                    email: ProviderAttribute.GOOGLE_EMAIL,
+                    givenName: ProviderAttribute.GOOGLE_GIVEN_NAME,
+                    familyName: ProviderAttribute.GOOGLE_FAMILY_NAME,
+                    profilePicture: ProviderAttribute.GOOGLE_PICTURE,
                 },
             });
             userPool.registerIdentityProvider(googleProvider);
-            supportedProviders.push(cognito.UserPoolClientIdentityProvider.GOOGLE);
+            supportedProviders.push(UserPoolClientIdentityProvider.GOOGLE);
             dependencies.push(googleProvider);
         }
 
-        let microsoftProvider: cognito.UserPoolIdentityProviderOidc | undefined;
+        let microsoftProvider: UserPoolIdentityProviderOidc | undefined;
         if (props.microsoftClientId && props.microsoftClientSecret && props.microsoftTenantId) {
-            microsoftProvider = new cognito.UserPoolIdentityProviderOidc(this, "SaffiraMicrosoftProvider", {
+            microsoftProvider = new UserPoolIdentityProviderOidc(this, "SaffiraMicrosoftProvider", {
                 userPool: userPool,
                 name: "Microsoft",
                 clientId: props.microsoftClientId || "",
@@ -71,14 +79,14 @@ export class CognitoStack extends cdk.Stack {
                 issuerUrl: `https://login.microsoftonline.com/${props.microsoftTenantId}/v2.0`,
                 scopes: ["openid", "profile", "email"],
                 attributeMapping: {
-                    email: cognito.ProviderAttribute.other("email"),
-                    givenName: cognito.ProviderAttribute.other("given_name"),
-                    familyName: cognito.ProviderAttribute.other("family_name"),
-                    profilePicture: cognito.ProviderAttribute.other("picture"),
+                    email: ProviderAttribute.other("email"),
+                    givenName: ProviderAttribute.other("given_name"),
+                    familyName: ProviderAttribute.other("family_name"),
+                    profilePicture: ProviderAttribute.other("picture"),
                 },
             });
             userPool.registerIdentityProvider(microsoftProvider);
-            supportedProviders.push(cognito.UserPoolClientIdentityProvider.custom("Microsoft"));
+            supportedProviders.push(UserPoolClientIdentityProvider.custom("Microsoft"));
             dependencies.push(microsoftProvider);
         }
 
@@ -89,9 +97,9 @@ export class CognitoStack extends cdk.Stack {
                 userSrp: true,
             },
             supportedIdentityProviders: [
-                cognito.UserPoolClientIdentityProvider.COGNITO,
-                cognito.UserPoolClientIdentityProvider.GOOGLE,
-                cognito.UserPoolClientIdentityProvider.custom("Microsoft"),
+                UserPoolClientIdentityProvider.COGNITO,
+                UserPoolClientIdentityProvider.GOOGLE,
+                UserPoolClientIdentityProvider.custom("Microsoft"),
             ],
             oAuth: {
                 flows: {
@@ -99,7 +107,7 @@ export class CognitoStack extends cdk.Stack {
                 },
                 callbackUrls: props.callbackUrls,
                 logoutUrls: props.logoutUrls,
-                scopes: [cognito.OAuthScope.EMAIL, cognito.OAuthScope.OPENID, cognito.OAuthScope.PROFILE],
+                scopes: [OAuthScope.EMAIL, OAuthScope.OPENID, OAuthScope.PROFILE],
             },
             preventUserExistenceErrors: true,
         });
@@ -118,12 +126,12 @@ export class CognitoStack extends cdk.Stack {
         }
 
         // Output the User Pool ID and Client ID
-        new cdk.CfnOutput(this, "UserPoolId", {
+        new CfnOutput(this, "UserPoolId", {
             value: userPool.userPoolId,
             description: "The ID of the Cognito User Pool",
             exportName: "SaffiraUserPoolId",
         });
-        new cdk.CfnOutput(this, "UserPoolClientId", {
+        new CfnOutput(this, "UserPoolClientId", {
             value: userPoolClient.userPoolClientId,
             description: "The ID of the Cognito User Pool Client",
             exportName: "SaffiraUserPoolClientId",
