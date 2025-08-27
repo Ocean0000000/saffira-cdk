@@ -1,31 +1,53 @@
 import { StackProps, Stack, RemovalPolicy, SecretValue, CfnOutput } from "aws-cdk-lib";
 import { Construct } from "constructs";
+import { join } from "path";
 import {
     UserPool,
+    VerificationEmailStyle,
     AccountRecovery,
     UserPoolClientIdentityProvider,
     UserPoolIdentityProviderGoogle,
     UserPoolIdentityProviderOidc,
     ProviderAttribute,
     OAuthScope,
+    UserPoolEmail,
 } from "aws-cdk-lib/aws-cognito";
+import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
+import { Runtime } from "aws-cdk-lib/aws-lambda";
 
 export interface CognitoStackProps extends StackProps {
-    callbackUrls: string[];
-    logoutUrls: string[];
-    userPoolDomain?: string;
-    googleClientId?: string;
-    googleClientSecret?: string;
-    microsoftClientId?: string;
-    microsoftClientSecret?: string;
-    microsoftTenantId?: string;
+    deploymentUrl: string;
+    userPoolDomain: string;
+    googleClientId: string;
+    googleClientSecret: string;
+    microsoftClientId: string;
+    microsoftClientSecret: string;
+    microsoftTenantId: string;
 }
 
 export class CognitoStack extends Stack {
     constructor(scope: Construct, id: string, props: CognitoStackProps) {
         super(scope, id, props);
 
-        // Create a Cognito User Pool
+        const {
+            userPoolDomain,
+            deploymentUrl,
+            googleClientId,
+            googleClientSecret,
+            microsoftClientId,
+            microsoftClientSecret,
+            microsoftTenantId,
+        } = props;
+
+        const customSignUpMessageFn = new NodejsFunction(this, "CustomSignUpMessage", {
+            runtime: Runtime.NODEJS_22_X,
+            entry: join(__dirname, "../lambda/custom-sign-up-message/index.ts"),
+            handler: "index.handler",
+            environment: {
+                DEPLOYMENT_URL: deploymentUrl,
+            },
+        });
+
         const userPool = new UserPool(this, "SaffiraUserPool", {
             selfSignUpEnabled: true,
             signInAliases: {
@@ -39,23 +61,27 @@ export class CognitoStack extends Stack {
             autoVerify: {
                 email: true,
             },
+            userVerification: {
+                emailStyle: VerificationEmailStyle.CODE,
+                emailSubject: "Verify your email for Saffira.ai",
+                emailBody: "Your verification code is: {####}",
+            },
+            lambdaTriggers: {
+                customMessage: customSignUpMessageFn,
+            },
             accountRecovery: AccountRecovery.EMAIL_ONLY,
-            removalPolicy:
-                process.env.NODE_ENV === "development" ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN,
+            removalPolicy: process.env.NODE_ENV === "development" ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN,
         });
 
-        // Google and Microsoft Identity Providers
-        const supportedProviders: UserPoolClientIdentityProvider[] = [
-            UserPoolClientIdentityProvider.COGNITO,
-        ];
+        const supportedProviders: UserPoolClientIdentityProvider[] = [UserPoolClientIdentityProvider.COGNITO];
         const dependencies: Construct[] = [];
 
         let googleProvider: UserPoolIdentityProviderGoogle | undefined;
-        if (props.googleClientId && props.googleClientSecret) {
+        if (googleClientId && googleClientSecret) {
             googleProvider = new UserPoolIdentityProviderGoogle(this, "SaffiraGoogleProvider", {
                 userPool: userPool,
-                clientId: props.googleClientId || "",
-                clientSecretValue: SecretValue.unsafePlainText(props.googleClientSecret),
+                clientId: googleClientId || "",
+                clientSecretValue: SecretValue.unsafePlainText(googleClientSecret),
                 scopes: ["email", "profile", "openid"],
                 attributeMapping: {
                     email: ProviderAttribute.GOOGLE_EMAIL,
@@ -70,13 +96,13 @@ export class CognitoStack extends Stack {
         }
 
         let microsoftProvider: UserPoolIdentityProviderOidc | undefined;
-        if (props.microsoftClientId && props.microsoftClientSecret && props.microsoftTenantId) {
+        if (microsoftClientId && microsoftClientSecret && microsoftTenantId) {
             microsoftProvider = new UserPoolIdentityProviderOidc(this, "SaffiraMicrosoftProvider", {
                 userPool: userPool,
                 name: "Microsoft",
-                clientId: props.microsoftClientId || "",
-                clientSecret: props.microsoftClientSecret || "",
-                issuerUrl: `https://login.microsoftonline.com/${props.microsoftTenantId}/v2.0`,
+                clientId: microsoftClientId || "",
+                clientSecret: microsoftClientSecret || "",
+                issuerUrl: `https://login.microsoftonline.com/${microsoftTenantId}/v2.0`,
                 scopes: ["openid", "profile", "email"],
                 attributeMapping: {
                     email: ProviderAttribute.other("email"),
@@ -90,7 +116,6 @@ export class CognitoStack extends Stack {
             dependencies.push(microsoftProvider);
         }
 
-        // Create a User Pool Client
         const userPoolClient = userPool.addClient("SaffiraUserPoolClient", {
             userPoolClientName: "SaffiraUserPoolClient",
             authFlows: {
@@ -105,8 +130,8 @@ export class CognitoStack extends Stack {
                 flows: {
                     authorizationCodeGrant: true,
                 },
-                callbackUrls: props.callbackUrls,
-                logoutUrls: props.logoutUrls,
+                callbackUrls: [deploymentUrl + "/callback"],
+                logoutUrls: [deploymentUrl + "/login"],
                 scopes: [OAuthScope.EMAIL, OAuthScope.OPENID, OAuthScope.PROFILE],
             },
             preventUserExistenceErrors: true,
@@ -117,15 +142,14 @@ export class CognitoStack extends Stack {
         });
 
         // Set the user pool domain if provided
-        if (props.userPoolDomain) {
+        if (userPoolDomain) {
             userPool.addDomain("SaffiraUserPoolDomain", {
                 cognitoDomain: {
-                    domainPrefix: props.userPoolDomain,
+                    domainPrefix: userPoolDomain,
                 },
             });
         }
 
-        // Output the User Pool ID and Client ID
         new CfnOutput(this, "UserPoolId", {
             value: userPool.userPoolId,
             description: "The ID of the Cognito User Pool",
