@@ -5,15 +5,16 @@ import {
     UserPool,
     VerificationEmailStyle,
     AccountRecovery,
+    UserPoolOperation,
     UserPoolClientIdentityProvider,
     UserPoolIdentityProviderGoogle,
     UserPoolIdentityProviderOidc,
     ProviderAttribute,
     OAuthScope,
-    UserPoolEmail,
 } from "aws-cdk-lib/aws-cognito";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
+import { Effect, Policy, PolicyStatement } from "aws-cdk-lib/aws-iam";
 
 export interface CognitoStackProps extends StackProps {
     deploymentUrl: string;
@@ -39,15 +40,6 @@ export class CognitoStack extends Stack {
             microsoftTenantId,
         } = props;
 
-        const customSignUpMessageFn = new NodejsFunction(this, "CustomSignUpMessage", {
-            runtime: Runtime.NODEJS_22_X,
-            entry: join(__dirname, "../lambda/custom-sign-up-message/index.ts"),
-            handler: "index.handler",
-            environment: {
-                DEPLOYMENT_URL: deploymentUrl,
-            },
-        });
-
         const userPool = new UserPool(this, "SaffiraUserPool", {
             selfSignUpEnabled: true,
             signInAliases: {
@@ -66,12 +58,42 @@ export class CognitoStack extends Stack {
                 emailSubject: "Verify your email for Saffira.ai",
                 emailBody: "Your verification code is: {####}",
             },
-            lambdaTriggers: {
-                customMessage: customSignUpMessageFn,
-            },
             accountRecovery: AccountRecovery.EMAIL_ONLY,
             removalPolicy: process.env.NODE_ENV === "development" ? RemovalPolicy.DESTROY : RemovalPolicy.RETAIN,
         });
+
+        const linkAccounts = new NodejsFunction(this, "LinkAccounts", {
+            runtime: Runtime.NODEJS_22_X,
+            entry: join(__dirname, "../lambda/link-accounts/index.ts"),
+            handler: "index.handler",
+        });
+
+        const linkAccountsPolicyStatement = new PolicyStatement({
+            effect: Effect.ALLOW,
+            actions: [
+                "cognito-idp:ListUsers",
+                "cognito-idp:AdminLinkProviderForUser",
+            ],
+            resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/*`]
+        });
+
+        const linkAccountsPolicy = new Policy(this, "LinkAccountsPolicy", {
+            statements: [linkAccountsPolicyStatement]
+        });
+
+        linkAccounts.role!.attachInlinePolicy(linkAccountsPolicy);
+
+        const customSignUpMessageFn = new NodejsFunction(this, "CustomSignUpMessage", {
+            runtime: Runtime.NODEJS_22_X,
+            entry: join(__dirname, "../lambda/custom-sign-up-message/index.ts"),
+            handler: "index.handler",
+            environment: {
+                DEPLOYMENT_URL: deploymentUrl,
+            },
+        });
+
+        userPool.addTrigger(UserPoolOperation.PRE_SIGN_UP, linkAccounts);
+        userPool.addTrigger(UserPoolOperation.CUSTOM_MESSAGE, customSignUpMessageFn);
 
         const supportedProviders: UserPoolClientIdentityProvider[] = [UserPoolClientIdentityProvider.COGNITO];
         const dependencies: Construct[] = [];
@@ -85,6 +107,7 @@ export class CognitoStack extends Stack {
                 scopes: ["email", "profile", "openid"],
                 attributeMapping: {
                     email: ProviderAttribute.GOOGLE_EMAIL,
+                    emailVerified: ProviderAttribute.GOOGLE_EMAIL_VERIFIED,
                     givenName: ProviderAttribute.GOOGLE_GIVEN_NAME,
                     familyName: ProviderAttribute.GOOGLE_FAMILY_NAME,
                     profilePicture: ProviderAttribute.GOOGLE_PICTURE,
@@ -106,6 +129,7 @@ export class CognitoStack extends Stack {
                 scopes: ["openid", "profile", "email"],
                 attributeMapping: {
                     email: ProviderAttribute.other("email"),
+                    emailVerified: ProviderAttribute.other("email_verified"),
                     givenName: ProviderAttribute.other("given_name"),
                     familyName: ProviderAttribute.other("family_name"),
                     profilePicture: ProviderAttribute.other("picture"),

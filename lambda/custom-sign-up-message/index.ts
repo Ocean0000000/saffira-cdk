@@ -1,7 +1,11 @@
-import type { CustomMessageTriggerEvent } from 'aws-lambda/trigger/cognito-user-pool-trigger';
+import type { CustomMessageTriggerEvent } from 'aws-lambda/trigger/cognito-user-pool-trigger/custom-message';
 
 export const handler = async (event: CustomMessageTriggerEvent) => {
     console.log("Event: ", JSON.stringify(event, null, 2));
+
+    if (event.triggerSource !== "CustomMessage_SignUp") {
+        return event;
+    }
     
     const email = event.request.userAttributes.email;
     const code = event.request.codeParameter;
